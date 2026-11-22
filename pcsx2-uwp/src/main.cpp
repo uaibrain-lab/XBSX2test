@@ -334,8 +334,14 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 	}
 };
 
+extern "C" void uwp_redirect_file_apis_startup(void);
+
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
+	// Redirect the CRT/XBSX2 file imports through the UWP file broker.
+	// Needed for authorized FAT32/exFAT and NTFS USB media in Dev Mode.
+	// Hooking falls back to existing Win32 behavior when not applicable.
+	uwp_redirect_file_apis_startup();
 	SDL_SetMainReady();
 
 	winrt::init_apartment();
