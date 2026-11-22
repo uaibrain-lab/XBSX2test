@@ -941,6 +941,12 @@ bool GSDevice11::CreateSwapChain()
 	}
 #endif
 
+	if (FAILED(hr) || !m_swap_chain)
+	{
+		Console.ErrorFmt("PS2 embedded XAML: swap-chain creation/attachment failed: 0x%08X", static_cast<unsigned>(hr));
+		return false;
+	}
+
 	if (!CreateSwapChainRTV())
 	{
 		DestroySwapChain();
