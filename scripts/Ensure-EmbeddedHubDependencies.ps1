@@ -57,14 +57,26 @@ if(-not $nugetOk){
 if($missing.Count -gt 0){
  $bat=Join-Path $root ".github\workflows\scripts\uwp\build-dependencies-uwp.bat"
  if(-not (Test-Path -LiteralPath $bat -PathType Leaf)){throw "HUB_PS2_DEPS_SCRIPT_MISSING=$bat"}
- $seven=@(
-  (Join-Path $env:ProgramFiles '7-Zip\7z.exe'),
-  (Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) '7-Zip\7z.exe')
- )|Where-Object {Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1
+ $sevenCommand=Get-Command 7z.exe -ErrorAction SilentlyContinue
+ $seven=if($sevenCommand){$sevenCommand.Source}else{""}
+ if(-not $seven){
+  $seven=@(
+   (Join-Path $env:ProgramFiles '7-Zip\7z.exe'),
+   (Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) '7-Zip\7z.exe')
+  )|Where-Object {Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1
+ }
  if(-not $seven){throw "HUB_PS2_NEEDS_7ZIP: install 7-Zip (winget install --id 7zip.7zip -e)"}
  $env:SEVENZIP='"'+$seven+'"'
  $patchTool=Get-Command patch.exe -ErrorAction SilentlyContinue
- $patchPath=if($patchTool){$patchTool.Source}else{"C:\Program Files\Git\usr\bin\patch.exe"}
+ $patchPath=if($patchTool){$patchTool.Source}else{""}
+ if(-not $patchPath){
+  $gitTool=Get-Command git.exe -ErrorAction SilentlyContinue
+  if($gitTool){
+   $gitRoot=Split-Path -Parent (Split-Path -Parent $gitTool.Source)
+   $patchPath=Join-Path $gitRoot 'usr\bin\patch.exe'
+  }
+ }
+ if(-not $patchPath){$patchPath="C:\Program Files\Git\usr\bin\patch.exe"}
  if(-not (Test-Path -LiteralPath $patchPath -PathType Leaf)){throw "HUB_PS2_NEEDS_GIT_PATCH: install Git for Windows"}
  $env:PATCH='"'+$patchPath+'"'
  $vswhere=Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) 'Microsoft Visual Studio\Installer\vswhere.exe'
