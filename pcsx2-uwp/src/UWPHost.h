@@ -10,6 +10,7 @@
 #include "pcsx2/Host.h"
 
 #include <atomic>
+struct IDXGISwapChain1;
 #include <memory>
 
 struct VMBootParameters;
@@ -96,6 +97,12 @@ namespace UWPHost
 
 	/// Sets the render window. Call on the UI thread before starting the CPU thread.
 	void SetWindow(const winrt::Windows::UI::Core::CoreWindow& window);
+    // Embedded single-package Hub only: XAML owns the CoreWindow/dispatcher.
+    // The ABI pointer must implement ISwapChainPanelNative.
+    bool SetXamlSwapChainPanel(void* panel_abi, u32 width, u32 height);
+    // Called by DX11/DX12 GS threads; dispatches SetSwapChain to XAML UI.
+    bool AttachXamlSwapChain(struct IDXGISwapChain1* swap_chain);
+
 
 	/// Updates the render window size. Must be called on the UI thread.
 	void UpdateWindowSize();
