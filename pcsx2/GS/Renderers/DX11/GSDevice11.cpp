@@ -922,6 +922,8 @@ bool GSDevice11::CreateSwapChain()
 		// Only one APPX: compose emulation frames inside the Hub's XAML.
 		// The GS thread creates the swap chain, UWPHost binds it on the UI
 		// dispatcher through ISwapChainPanelNative::SetSwapChain.
+		// XAML composition only supports DXGI flip-model swap chains.
+		swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
 		swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 		hr = m_dxgi_factory->CreateSwapChainForComposition(
