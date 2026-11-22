@@ -3,6 +3,8 @@
 // This file deliberately does not register an Application, CoreApplication::Run,
 // a URI handler, or another APPX. It uses the existing XBSX2 CPU thread.
 #include "pcsx2/PrecompiledHeader.h"
+// Export declaration lives in the shared C ABI header (MSVC C2375 fix).
+#define UAIBRAIN_PS2_CORE_PROVIDER_BUILD 1
 #include "ps2_embedded_core_v2.h"
 #include "UWPHost.h"
 #include "HubSharedHome.h"
@@ -143,7 +145,8 @@ const UaiBrainPs2CoreApiV2 s_api{
 }
 // The DLL export is linked/imported into the Hub executable; the only
 // installed package is the Hub APPX. This is actual PCSX2 host code, not a stub.
-extern "C" __declspec(dllexport)
+// The preceding header declaration already supplies C linkage and dllexport.
+// Repeating __declspec(dllexport) here triggers MSVC C2375.
 const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void){
  return &s_api;
 }
