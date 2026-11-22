@@ -10,6 +10,9 @@
 #include "GS/Renderers/DX12/D3D12Builders.h"
 #include "GS/Renderers/DX12/D3D12ShaderCache.h"
 #include "Host.h"
+#if defined(WINRT_XBOX)
+namespace UWPHost { bool AttachXamlSwapChain(IDXGISwapChain1* chain); }
+#endif
 #include "ShaderCacheVersion.h"
 
 #include "common/Console.h"
@@ -1167,9 +1170,24 @@ bool GSDevice12::CreateSwapChain()
 		Console.ErrorFmt("D3D12: GetParent() on swap chain to get factory failed: {}", Error::CreateHResult(hr).GetDescription());
 	}
 #else
-	Console.WriteLn("D3D12: Creating a %dx%d WinRT swap chain", swap_chain_desc.Width, swap_chain_desc.Height);
-	hr = m_dxgi_factory->CreateSwapChainForCoreWindow(
-		m_command_queue.get(), static_cast<::IUnknown*>(m_window_info.surface_handle), &swap_chain_desc, nullptr, m_swap_chain.put());
+	if (m_window_info.xaml_swapchain_panel)
+	{
+		swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
+		swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+		hr = m_dxgi_factory->CreateSwapChainForComposition(
+			m_command_queue.get(), &swap_chain_desc, nullptr, m_swap_chain.put());
+		if (SUCCEEDED(hr) && !UWPHost::AttachXamlSwapChain(m_swap_chain.Get()))
+		{
+			m_swap_chain.Reset();
+			hr = E_FAIL;
+		}
+	}
+	else
+	{
+		Console.WriteLn("D3D12: Creating a %dx%d WinRT swap chain", swap_chain_desc.Width, swap_chain_desc.Height);
+		hr = m_dxgi_factory->CreateSwapChainForCoreWindow(
+			m_command_queue.get(), static_cast<::IUnknown*>(m_window_info.surface_handle), &swap_chain_desc, nullptr, m_swap_chain.put());
+	}
 #endif
 
 	if (!CreateSwapChainRTV())
