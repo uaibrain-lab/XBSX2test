@@ -1176,9 +1176,9 @@ bool GSDevice12::CreateSwapChain()
 		swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 		hr = m_dxgi_factory->CreateSwapChainForComposition(
 			m_command_queue.get(), &swap_chain_desc, nullptr, m_swap_chain.put());
-		if (SUCCEEDED(hr) && !UWPHost::AttachXamlSwapChain(m_swap_chain.Get()))
+		if (SUCCEEDED(hr) && !UWPHost::AttachXamlSwapChain(m_swap_chain.get()))
 		{
-			m_swap_chain.Reset();
+			m_swap_chain.reset();
 			hr = E_FAIL;
 		}
 	}
