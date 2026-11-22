@@ -22,7 +22,7 @@ namespace {
 std::atomic<bool> s_attached{false};
 std::mutex s_start_mutex;
 bool s_window_bound = false;
-extern "C" void uwp_redirect_file_apis_startup(void);
+extern "C" void uwp_redirect_file_apis_embedded(void);
 
 // UTF-16 from the picker, UTF-8 for PCSX2's FileSystem/VMManager.
 std::string utf8_path(const wchar_t* path) {
@@ -52,6 +52,9 @@ int attach_panel(void* abi,uint32_t width,uint32_t height) {
    s_window_bound=true;
   }
   if(!UWPHost::SetXamlSwapChainPanel(abi,width,height))return 0;
+  // In the single-package build, PCSX2 is a DLL: its own import table
+  // needs the FromApp USB bridge, not the Hub EXE's import table.
+  uwp_redirect_file_apis_embedded();
   // SDL native pad and video services initialize in the existing PCSX2 host.
   SDL_SetMainReady();
   if(!UWPHost::InitializeConfig())return 0;
