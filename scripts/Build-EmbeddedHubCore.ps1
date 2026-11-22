@@ -55,9 +55,13 @@ $props=@(
  "/p:SolutionDir=$($root.TrimEnd('\'))\",
  "/p:OutDir=$($output.TrimEnd('\'))\"
 )
+$log=Join-Path $output "embedded-ps2-msbuild.log"
 Write-Host "HUB_PS2_BUILDING_EMBEDDED_DLL_WITH=$msbuild"
-& $msbuild $project "/restore" "/m:2" "/t:Build" @props
-if($LASTEXITCODE -ne 0){throw "HUB_PS2_EMBEDDED_BUILD_FAILED=$LASTEXITCODE"}
+Write-Host "HUB_PS2_MSBUILD_LOG=$log"
+# The complete compiler output is retained in the logfile. The console only
+# shows errors/summary, avoiding megabytes of unrelated third-party sources.
+& $msbuild $project "/restore" "/m:2" "/t:Build" "/verbosity:minimal" "/consoleloggerparameters:ErrorsOnly;Summary" "/fileLogger" ("/fileLoggerParameters:LogFile="+$log+";Verbosity=normal") @props
+if($LASTEXITCODE -ne 0){throw "HUB_PS2_EMBEDDED_BUILD_FAILED=$LASTEXITCODE; LOG=$log"}
 $dll=Join-Path $output "uaibrain_ps2_embedded.dll"
 $lib=Join-Path $output "uaibrain_ps2_embedded.lib"
 if(!(Test-Path $dll) -or !(Test-Path $lib)){
