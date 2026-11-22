@@ -42,6 +42,9 @@
 #include <winrt/Windows.UI.ViewManagement.h>
 
 #include <chrono>
+#include <future>
+#include <windows.ui.xaml.media.dxinterop.h>
+#include <dxgi1_2.h>
 
 // clang-format off
 namespace DataTransfer 	  = winrt::Windows::ApplicationModel::DataTransfer;
@@ -153,6 +156,11 @@ static std::atomic_bool s_settings_save_requested = false;
 static std::optional<std::chrono::steady_clock::time_point> s_settings_save_time;
 
 static CoreUI::CoreWindow s_window{nullptr};
+// The Hub uses its existing XAML CoreWindow; the emulator paints to a
+// SwapChainPanel inside that window. The referenced COM interface is retained.
+static winrt::com_ptr<ISwapChainPanelNative> s_hub_xaml_panel;
+static u32 s_hub_panel_width = 0;
+static u32 s_hub_panel_height = 0;
 static CoreUI::CoreDispatcher s_dispatcher{nullptr};
 static SystemThreading::ThreadPoolTimer s_ui_timer{nullptr};
 static std::atomic_bool s_ui_wake_pending = false;
@@ -1376,6 +1384,52 @@ float UWPHost::GetDisplayScale()
 	return std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
 }
 
+bool UWPHost::SetXamlSwapChainPanel(void* abi,u32 width,u32 height)
+{
+ if (!abi || width < 64 || height < 64 || width > 4096 || height > 4096 ||
+     !s_window || !s_dispatcher || !s_dispatcher.HasThreadAccess())
+  return false;
+ winrt::com_ptr<ISwapChainPanelNative> panel;
+ const HRESULT hr = reinterpret_cast<IUnknown*>(abi)->QueryInterface(
+     __uuidof(ISwapChainPanelNative), panel.put_void());
+ if (FAILED(hr) || !panel)
+  return false;
+ s_hub_xaml_panel = std::move(panel);
+ s_hub_panel_width = width;
+ s_hub_panel_height = height;
+ UpdateWindowSize();
+ return true;
+}
+
+bool UWPHost::AttachXamlSwapChain(IDXGISwapChain1* chain)
+{
+ if (!chain || !s_hub_xaml_panel || !s_dispatcher)
+  return false;
+ const auto panel = s_hub_xaml_panel;
+ if (s_dispatcher.HasThreadAccess())
+  return SUCCEEDED(panel->SetSwapChain(chain));
+
+ // D3D11/D3D12 create their swap chain on the GS thread. SetSwapChain
+ // must execute on the XAML dispatcher; never block the UI thread itself.
+ auto completion = std::make_shared<std::promise<HRESULT>>();
+ auto result = completion->get_future();
+ winrt::com_ptr<IDXGISwapChain1> keep_alive;
+ keep_alive.copy_from(chain);
+ try
+ {
+  s_dispatcher.RunAsync(CoreUI::CoreDispatcherPriority::High,
+   [panel,keep_alive,completion]() {
+    completion->set_value(panel->SetSwapChain(keep_alive.get()));
+   });
+  return result.wait_for(std::chrono::seconds(5))==std::future_status::ready &&
+         SUCCEEDED(result.get());
+ }
+ catch (...)
+ {
+  return false;
+ }
+}
+
 void UWPHost::SetWindow(const CoreUI::CoreWindow& window)
 {
 	s_window = window;
@@ -1442,6 +1496,13 @@ void UWPHost::UpdateWindowSize()
 	WindowInfo wi;
 	wi.type = WindowInfo::Type::WinRT;
 	wi.surface_handle = winrt::get_abi(s_window);
+	if (s_hub_xaml_panel)
+	{
+		wi.surface_handle = s_hub_xaml_panel.get();
+		wi.xaml_swapchain_panel = true;
+		wi.surface_width = s_hub_panel_width;
+		wi.surface_height = s_hub_panel_height;
+	}
 	wi.surface_refresh_rate = 60.0f;
 	wi.surface_scale = GetDisplayScale();
 
@@ -1475,6 +1536,13 @@ void UWPHost::UpdateWindowSize()
 		wi.surface_height = max_height;
 	}
 
+	// For a XAML surface, the SwapChainPanel size is authoritative; HDMI
+	// resolution belongs to the standalone CoreWindow renderer only.
+	if (s_hub_xaml_panel)
+	{
+		wi.surface_width = s_hub_panel_width;
+		wi.surface_height = s_hub_panel_height;
+	}
 	wi.surface_width = std::min(wi.surface_width, max_width);
 	wi.surface_height = std::min(wi.surface_height, max_height);
 	if (wi.surface_refresh_rate <= 0.0f)
