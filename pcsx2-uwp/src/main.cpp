@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "pcsx2/PrecompiledHeader.h"
+#include "common/FileSystem.h"
 
 #include "UWPHost.h"
 #include "UWPKeyboard.h"
@@ -35,6 +36,9 @@ using namespace Windows::UI::Core;
 struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 {
 	winrt::hstring m_launchOnExit;
+	// Optional Hub resume state: evaluated only after the PCSX2 config is ready.
+	// A normal protocol launch always starts fresh unless resume=1 was requested.
+	bool m_hub_resume_requested = false;
 	bool m_initialized = false;
 	std::optional<VMBootParameters> m_autoboot;
 
@@ -82,6 +86,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 			return;
 
 		std::stringstream filePath;
+		m_hub_resume_requested = false;
+
 
 		if (args.Kind() == Windows::ApplicationModel::Activation::ActivationKind::Protocol)
 		{
@@ -116,6 +122,10 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 						first = false;
 						filePath << s;
 					}
+				}
+				else if (arg.Name() == winrt::hstring(L"resume"))
+				{
+					m_hub_resume_requested = (arg.Value() == L"1");
 				}
 				else if (arg.Name() == winrt::hstring(L"launchOnExit"))
 				{
@@ -157,8 +167,18 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 		{
 			if (m_autoboot)
 			{
-				g_emu_thread->startVM(std::move(m_autoboot.value()));
+				VMBootParameters params = std::move(*m_autoboot);
 				m_autoboot.reset();
+				// Resume states live in XBSX2's own storage; the Hub does not
+				// request access to its private files or synthesize a save state.
+				// On missing/unidentifiable state boot normally from disc.
+				if (m_hub_resume_requested && !params.filename.empty())
+				{
+					const std::string resume = VMManager::GetSaveStateFileName(params.filename.c_str(), -1);
+					if (!resume.empty() && FileSystem::FileExists(resume.c_str()))
+						params.save_state = resume;
+				}
+				g_emu_thread->startVM(std::move(params));
 			}
 		}
 		// This doesn't return until we exit.
