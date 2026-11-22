@@ -9,6 +9,9 @@
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
 #include "Host.h"
+#if defined(WINRT_XBOX)
+namespace UWPHost { bool AttachXamlSwapChain(IDXGISwapChain1* chain); }
+#endif
 
 #include "common/BitUtils.h"
 #include "common/Error.h"
@@ -914,8 +917,26 @@ bool GSDevice11::CreateSwapChain()
 		Console.ErrorFmt("D3D11: GetParent() on swap chain to get factory failed: {}", Error::CreateHResult(hr).GetDescription());
 	}
 #else
-	Console.WriteLn("D3D11: Creating a %dx%d WinRT swap chain", swap_chain_desc.Width, swap_chain_desc.Height);
-	hr = m_dxgi_factory->CreateSwapChainForCoreWindow(m_dev.get(), static_cast<::IUnknown*>(m_window_info.surface_handle), &swap_chain_desc, nullptr, m_swap_chain.put());
+	if (m_window_info.xaml_swapchain_panel)
+	{
+		// Only one APPX: compose emulation frames inside the Hub's XAML.
+		// The GS thread creates the swap chain, UWPHost binds it on the UI
+		// dispatcher through ISwapChainPanelNative::SetSwapChain.
+		swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
+		swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+		hr = m_dxgi_factory->CreateSwapChainForComposition(
+			m_dev.get(), &swap_chain_desc, nullptr, m_swap_chain.put());
+		if (SUCCEEDED(hr) && !UWPHost::AttachXamlSwapChain(m_swap_chain.get()))
+		{
+			m_swap_chain.reset();
+			hr = E_FAIL;
+		}
+	}
+	else
+	{
+		Console.WriteLn("D3D11: Creating a %dx%d WinRT swap chain", swap_chain_desc.Width, swap_chain_desc.Height);
+		hr = m_dxgi_factory->CreateSwapChainForCoreWindow(m_dev.get(), static_cast<::IUnknown*>(m_window_info.surface_handle), &swap_chain_desc, nullptr, m_swap_chain.put());
+	}
 #endif
 
 	if (!CreateSwapChainRTV())
