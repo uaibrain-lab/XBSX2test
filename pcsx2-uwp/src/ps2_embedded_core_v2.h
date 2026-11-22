@@ -35,9 +35,15 @@ typedef struct UaiBrainPs2CoreApiV2 {
  // Asynchronous request to stop VM, saving state when possible.
  void (*request_exit)(void);
 } UaiBrainPs2CoreApiV2;
-// Exactly one symbol exported by the embedded DLL (or by the unavailable
-// stub when no PCSX2 core was linked). Never imports a protocol handler.
-const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void);
+// The only exported symbol of the embedded PCSX2 DLL. The MSVC linkage and
+// storage attribute must be declared ONCE, before the function definition.
+// The Hub's no-core stub and consumer see a plain C ABI declaration.
+#if defined(_WIN32) && defined(UAIBRAIN_PS2_CORE_PROVIDER_BUILD)
+#define UAIBRAIN_PS2_CORE_ENTRY __declspec(dllexport)
+#else
+#define UAIBRAIN_PS2_CORE_ENTRY
+#endif
+UAIBRAIN_PS2_CORE_ENTRY const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void);
 #ifdef __cplusplus
 }
 #endif
