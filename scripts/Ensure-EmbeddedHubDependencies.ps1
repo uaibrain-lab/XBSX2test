@@ -67,18 +67,37 @@ if($missing.Count -gt 0){
  }
  if(-not $seven){throw "HUB_PS2_NEEDS_7ZIP: install 7-Zip (winget install --id 7zip.7zip -e)"}
  $env:SEVENZIP='"'+$seven+'"'
- $patchTool=Get-Command patch.exe -ErrorAction SilentlyContinue
- $patchPath=if($patchTool){$patchTool.Source}else{""}
- if(-not $patchPath){
-  $gitTool=Get-Command git.exe -ErrorAction SilentlyContinue
-  if($gitTool){
-   $gitRoot=Split-Path -Parent (Split-Path -Parent $gitTool.Source)
-   $patchPath=Join-Path $gitRoot 'usr\bin\patch.exe'
+ # Never use the first patch.exe on PATH. Strawberry Perl exposes an
+ # incompatible/crashing patch.exe at C:\Strawberry\c\bin\patch.exe.
+ # Only the Git for Windows copy is supported by our upstream UWP patches.
+ $gitTool=Get-Command git.exe -ErrorAction SilentlyContinue
+ $gitRoots=@()
+ if($gitTool){
+  $gitBin=Split-Path -Parent $gitTool.Source
+  $gitRoots+=Split-Path -Parent $gitBin
+ }
+ $gitRoots+=@(
+  "C:\Program Files\Git",
+  "C:\Program Files (x86)\Git",
+  "E:\Program Files\Git",
+  "E:\Git"
+ )
+ $patchPath=$null
+ foreach($gitRoot in ($gitRoots|Select-Object -Unique)){
+  $candidate=Join-Path $gitRoot 'usr\bin\patch.exe'
+  if(Test-Path -LiteralPath $candidate -PathType Leaf){
+   $patchPath=$candidate
+   break
   }
  }
- if(-not $patchPath){$patchPath="C:\Program Files\Git\usr\bin\patch.exe"}
- if(-not (Test-Path -LiteralPath $patchPath -PathType Leaf)){throw "HUB_PS2_NEEDS_GIT_PATCH: install Git for Windows"}
+ if(-not $patchPath){
+  throw "HUB_PS2_NEEDS_GIT_PATCH: Git for Windows usr\bin\patch.exe not found. Strawberry patch.exe is unsupported."
+ }
+ if($patchPath -match '(?i)strawberry'){
+  throw "HUB_PS2_UNSAFE_PATCH_TOOL=$patchPath"
+ }
  $env:PATCH='"'+$patchPath+'"'
+ Write-Host "HUB_PS2_PATCH_TOOL=$patchPath"
  $vswhere=Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) 'Microsoft Visual Studio\Installer\vswhere.exe'
  if(Test-Path -LiteralPath $vswhere){
   $vsDirs=@(& $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath)
