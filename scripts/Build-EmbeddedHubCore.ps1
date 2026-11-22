@@ -36,6 +36,15 @@ if(!$msbuild){
  }
 }
 if(!$msbuild){throw "MSBUILD_NOT_FOUND: install VS2026/2022 C++ UWP tools"}
+# The PCSX2 repo does not track compiled deps; an empty checkout cannot
+# provide FreeType, Zstd, zlib, DirectX-Headers, SDL, etc. /restore alone also
+# does not restore old packages.config. Bootstrap once, reuse on later builds.
+$ensure=Join-Path $PSScriptRoot "Ensure-EmbeddedHubDependencies.ps1"
+if(-not (Test-Path -LiteralPath $ensure -PathType Leaf)){
+ throw "HUB_PS2_DEPENDENCY_BOOTSTRAP_MISSING=$ensure"
+}
+& $ensure -Root $root
+if(-not $?){throw "HUB_PS2_DEPENDENCY_BOOTSTRAP_FAILED"}
 # Use one compiler version and WindowsStore/UWP SDK for Hub and embedded core.
 $props=@(
  "/p:Configuration=$Configuration",
