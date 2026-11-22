@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// UaiBrain Xbox: PCSX2 embedded in the SAME AppContainer as the Hub XAML shell.
+// This file deliberately does not register an Application, CoreApplication::Run,
+// a URI handler, or another APPX. It uses the existing XBSX2 CPU thread.
+#include "pcsx2/PrecompiledHeader.h"
+#include "ps2_embedded_core_v2.h"
+#include "UWPHost.h"
+#include "HubSharedHome.h"
+#include "pcsx2/VMManager.h"
+#include "common/FileSystem.h"
+#include <windows.h>
+#include <winrt/Windows.UI.Core.h>
+#include <winrt/Windows.Foundation.h>
+#include <SDL3/SDL_main.h>
+#include <atomic>
+#include <string>
+#include <memory>
+#include <mutex>
+
+namespace {
+std::atomic<bool> s_attached{false};
+std::mutex s_start_mutex;
+bool s_window_bound = false;
+extern "C" void uwp_redirect_file_apis_startup(void);
+
+// UTF-16 from the picker, UTF-8 for PCSX2's FileSystem/VMManager.
+std::string utf8_path(const wchar_t* path) {
+ if(!path) return {};
+ int required=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,path,-1,nullptr,0,nullptr,nullptr);
+ if(required<=1||required>32768)return {};
+ std::string bytes(static_cast<std::size_t>(required),'\0');
+ if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,path,-1,
+                        bytes.data(),required,nullptr,nullptr))return {};
+ bytes.pop_back();
+ return bytes;
+}
+
+int attach_panel(void* abi,uint32_t width,uint32_t height) {
+ if(!abi||width<64||height<64||width>4096||height>4096)return 0;
+ std::lock_guard<std::mutex> guard(s_start_mutex);
+ if(s_attached.load())return 1;
+ try {
+  const auto window=winrt::Windows::UI::Core::CoreWindow::GetForCurrentThread();
+  if(!window)return 0;
+  const char* error=nullptr;
+  if(!VMManager::PerformEarlyHardwareChecks(&error))return 0;
+  if(!s_window_bound){
+   // In contrast to the standalone XBSX2 App, the XAML dispatcher is
+   // already running. UWPHost must not try to own or pump it.
+   UWPHost::SetWindow(window);
+   s_window_bound=true;
+  }
+  if(!UWPHost::SetXamlSwapChainPanel(abi,width,height))return 0;
+  // SDL native pad and video services initialize in the existing PCSX2 host.
+  SDL_SetMainReady();
+  if(!UWPHost::InitializeConfig())return 0;
+  if(!EmuThread::start())return 0;
+  s_attached.store(true);
+  return 1;
+ } catch(...) {
+  return 0;
+ }
+}
+int ready(){
+ return s_attached.load() && g_emu_thread && g_emu_thread->isRunning();
+}
+UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
+                                  const wchar_t* saves,int auto_resume) {
+ if(!ready())return UAIBRAIN_PS2_V2_NO_CORE;
+ const std::string game_file=utf8_path(game);
+ const std::string save_root=utf8_path(saves);
+ if(game_file.empty()||save_root.empty()||
+    !UaiBrainHubStorage::SafeHome(save_root)||
+    !FileSystem::FileExists(game_file.c_str()))
+  return UAIBRAIN_PS2_V2_INVALID_GAME;
+ if(VMManager::GetState()!=VMState::Shutdown)
+  return UAIBRAIN_PS2_V2_UNSUPPORTED; // Never overwrite an existing VM.
+ // Configure before the CPU thread begins booting the game. Existing
+ // memory cards are COPIED, never destroyed, by HubSharedHome::Configure.
+ if(!UaiBrainHubStorage::Configure(save_root))
+  return UAIBRAIN_PS2_V2_INTERNAL_ERROR;
+ VMBootParameters params;
+ params.filename=game_file;
+ params.fullscreen=true;
+ if(auto_resume) {
+  const std::string state=VMManager::GetSaveStateFileName(game_file.c_str(),-1);
+  if(!state.empty() && FileSystem::FileExists(state.c_str()))
+   params.save_state=state;
+ }
+ g_emu_thread->startVM(std::move(params));
+ return UAIBRAIN_PS2_V2_BOOT_ACCEPTED;
+}
+void pump_ui(){
+ if(s_attached.load())UWPHost::ProcessPendingEvents();
+}
+int has_vm(){
+ if(!s_attached.load())return -1;
+ return VMManager::HasValidVM()?1:0;
+}
+void request_exit(){
+ if(s_attached.load()&&g_emu_thread&&VMManager::HasValidVM())
+  g_emu_thread->shutdownVM(true); // Retain memory cards and clean save state.
+}
+const UaiBrainPs2CoreApiV2 s_api{
+ UAIBRAIN_PS2_CORE_ABI_V2,sizeof(UaiBrainPs2CoreApiV2),
+ attach_panel,ready,boot_disc,pump_ui,has_vm,request_exit
+};
+}
+// The DLL export is linked/imported into the Hub executable; the only
+// installed package is the Hub APPX. This is actual PCSX2 host code, not a stub.
+extern "C" __declspec(dllexport)
+const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void){
+ return &s_api;
+}
