@@ -101,7 +101,7 @@ namespace UWPHost
     // The ABI pointer must implement ISwapChainPanelNative.
     bool SetXamlSwapChainPanel(void* panel_abi, u32 width, u32 height);
     // Called by DX11/DX12 GS threads; dispatches SetSwapChain to XAML UI.
-    bool AttachXamlSwapChain(struct IDXGISwapChain1* swap_chain);
+    bool AttachXamlSwapChain(IDXGISwapChain1* swap_chain);
 
 
 	/// Updates the render window size. Must be called on the UI thread.
