@@ -23,7 +23,8 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
+    <ConfigurationType Condition="'$(UaiBrainHubEmbedded)'!='true'">Application</ConfigurationType>
+    <ConfigurationType Condition="'$(UaiBrainHubEmbedded)'=='true'">DynamicLibrary</ConfigurationType>
     <PlatformToolset>v145</PlatformToolset>
     <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
     <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
@@ -51,7 +52,9 @@
     <Import Condition="!$(Configuration.Contains(Release))" Project="$(SolutionDir)common\vsprops\IncrementalLinking.props" />
   </ImportGroup>
   <PropertyGroup>
-    <TargetName>$(EXEString)</TargetName>
+    <TargetName Condition="'$(UaiBrainHubEmbedded)'!='true'">$(EXEString)</TargetName>
+    <TargetName Condition="'$(UaiBrainHubEmbedded)'=='true'">uaibrain_ps2_embedded</TargetName>
+    <GenerateAppxPackageOnBuild Condition="'$(UaiBrainHubEmbedded)'=='true'">false</GenerateAppxPackageOnBuild>
   </PropertyGroup>
   <PropertyGroup Label="UserMacros">
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
@@ -155,17 +158,19 @@
     <ClInclude Include="..\pcsx2\PrecompiledHeader.h" />
     <ClInclude Include="src\CPUEventQueue.h" />
     <ClInclude Include="src\UWPHost.h" />
+    <ClInclude Include="src\ps2_embedded_core_v2.h" />
     <ClInclude Include="src\UWPKeyboard.h" />
     <ClInclude Include="src\UWPUtils.h" />
   </ItemGroup>
   <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest">
+    <AppxManifest Include="Package.appxmanifest" Condition="'$(UaiBrainHubEmbedded)'!='true'">
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\pcsx2\PrecompiledHeader.cpp" />
-    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\main.cpp" Condition="'$(UaiBrainHubEmbedded)'!='true'" />
+    <ClCompile Include="src\EmbeddedHubCore.cpp" Condition="'$(UaiBrainHubEmbedded)'=='true'" />
     <ClCompile Include="src\UWPHost.cpp" />
     <ClCompile Include="src\UWPFileRedirect.cpp" />
     <ClCompile Include="src\Translations.cpp" />
