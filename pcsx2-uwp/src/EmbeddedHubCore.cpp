@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.h>
 #include <SDL3/SDL_main.h>
 #include <atomic>
 #include <string>
@@ -69,16 +70,27 @@ UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
  if(!ready())return UAIBRAIN_PS2_V2_NO_CORE;
  const std::string game_file=utf8_path(game);
  const std::string save_root=utf8_path(saves);
- if(game_file.empty()||save_root.empty()||
-    !UaiBrainHubStorage::SafeHome(save_root)||
-    !FileSystem::FileExists(game_file.c_str()))
+ if(game_file.empty()||save_root.empty()||!FileSystem::FileExists(game_file.c_str()))
+  return UAIBRAIN_PS2_V2_INVALID_GAME;
+ // Same AppContainer: Hub's own LocalFolder is the preferred save root.
+ // For optional user-controlled USB media, validate the restricted folder
+ // before passing it to XBSX2's non-destructive home adapter.
+ const auto local=winrt::to_string(
+  winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path());
+ const bool is_local=(save_root==local);
+ if(!is_local&&!UaiBrainHubStorage::SafeHome(save_root))
   return UAIBRAIN_PS2_V2_INVALID_GAME;
  if(VMManager::GetState()!=VMState::Shutdown)
   return UAIBRAIN_PS2_V2_UNSUPPORTED; // Never overwrite an existing VM.
  // Configure before the CPU thread begins booting the game. Existing
  // memory cards are COPIED, never destroyed, by HubSharedHome::Configure.
- if(!UaiBrainHubStorage::Configure(save_root))
+ if(is_local) {
+  // Never redirect the emulator to a second app's storage, and do not
+  // require a USB drive for users who save in the one Hub AppContainer.
+  UaiBrainHubStorage::Configure("");
+ } else if(!UaiBrainHubStorage::Configure(save_root)) {
   return UAIBRAIN_PS2_V2_INTERNAL_ERROR;
+ }
  VMBootParameters params;
  params.filename=game_file;
  params.fullscreen=true;
