@@ -1,7 +1,9 @@
 /* Copyright (c) 2026 Skitzelles - part of Game Vault, https://github.com/skitzellez/xbox-game-vault
  * GPL-3.0-or-later, like PCSX2 / XBSX2.
  *
- * Imported unchanged as a GPL-compatible source adaptation from
+ * Imported as a GPL-compatible source adaptation; the embedded-DLL-only
+ * initialization below is a UaiBrain-specific modification.
+ * Original implementation adapted from
  * skitzellez/XBSX2-GameVault, branch gamevault, 22 Nov 2026.
  * Upstream reference: https://github.com/skitzellez/XBSX2-GameVault
  * Maintainers of this fork must preserve the upstream copyright notice.
@@ -316,6 +318,32 @@ extern "C" unsigned uwp_redirect_file_apis(void *module)
       }
    }
    return count;
+}
+
+/* Embedded engine: the host EXE is the premium Hub shell, NOT XBSX2.
+ * Patch our OWN DLL's import table rather than the shell's imports. The
+ * CRT imports are process-wide and are needed by fopen(), so these are
+ * patched as the original standalone broker does. Never patch the Hub EXE.
+ * __ImageBase is defined by MSVC's linker for this image (the engine DLL).
+ */
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+extern "C" void uwp_redirect_file_apis_embedded(void)
+{
+   static bool initialized = false; // Called once on the Hub XAML UI thread.
+   if (initialized)
+      return;
+   initialized = true;
+   unsigned n = uwp_redirect_file_apis(&__ImageBase);
+   static const wchar_t* const modules[] = {
+      L"ucrtbase.dll", L"ucrtbased.dll", L"msvcrt.dll", nullptr
+   };
+   for (int i = 0; modules[i]; ++i)
+   {
+      HMODULE runtime = GetModuleHandleW(modules[i]);
+      if (runtime)
+         n += uwp_redirect_file_apis(runtime);
+   }
+   log_redirect("Embedded PCSX2 DLL and C runtime", n);
 }
 
 /* The C runtime and XBSX2 itself, once at start-up. */
