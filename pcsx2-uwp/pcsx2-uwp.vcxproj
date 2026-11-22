@@ -167,6 +167,7 @@
     <ClCompile Include="..\pcsx2\PrecompiledHeader.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\UWPHost.cpp" />
+    <ClCompile Include="src\UWPFileRedirect.cpp" />
     <ClCompile Include="src\Translations.cpp" />
     <ClCompile Include="src\UWPKeyboard.cpp" />
     <ClCompile Include="src\UWPSound.cpp" />
