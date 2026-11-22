@@ -20,6 +20,8 @@
 
 namespace {
 std::atomic<bool> s_attached{false};
+std::atomic<bool> s_boot_queued{false};
+std::atomic<bool> s_exit_after_boot{false};
 std::mutex s_start_mutex;
 bool s_window_bound = false;
 extern "C" void uwp_redirect_file_apis_embedded(void);
@@ -102,19 +104,37 @@ UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
   if(!state.empty() && FileSystem::FileExists(state.c_str()))
    params.save_state=state;
  }
+ s_exit_after_boot.store(false,std::memory_order_release);
+ s_boot_queued.store(true,std::memory_order_release);
  g_emu_thread->startVM(std::move(params));
  return UAIBRAIN_PS2_V2_BOOT_ACCEPTED;
 }
 void pump_ui(){
- if(s_attached.load())UWPHost::ProcessPendingEvents();
+ if(!s_attached.load())return;
+ UWPHost::ProcessPendingEvents();
+ // The user may press B while the game is still being queued/initialized.
+ // Honor that exit when the VM first becomes valid; do not leave the player
+ // in the game after a visible "saving and returning" message.
+ if(VMManager::HasValidVM()){
+  s_boot_queued.store(false,std::memory_order_release);
+  if(s_exit_after_boot.exchange(false,std::memory_order_acq_rel) &&
+     g_emu_thread){
+   g_emu_thread->shutdownVM(true);
+  }
+ }
 }
 int has_vm(){
  if(!s_attached.load())return -1;
  return VMManager::HasValidVM()?1:0;
 }
 void request_exit(){
- if(s_attached.load()&&g_emu_thread&&VMManager::HasValidVM())
-  g_emu_thread->shutdownVM(true); // Retain memory cards and clean save state.
+ if(!s_attached.load()||!g_emu_thread)return;
+ if(VMManager::HasValidVM()){
+  s_exit_after_boot.store(false,std::memory_order_release);
+  g_emu_thread->shutdownVM(true); // Save memory card and normal resume state.
+ }else if(s_boot_queued.load(std::memory_order_acquire)){
+  s_exit_after_boot.store(true,std::memory_order_release);
+ }
 }
 const UaiBrainPs2CoreApiV2 s_api{
  UAIBRAIN_PS2_CORE_ABI_V2,sizeof(UaiBrainPs2CoreApiV2),
