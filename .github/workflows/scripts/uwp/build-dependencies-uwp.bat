@@ -46,6 +46,14 @@ if not defined PATCH (
   echo MISSING_GIT_PATCH: install Git for Windows.
   goto error
 )
+echo HUB_PS2_PATCH_CMD=%PATCH%
+rem The PowerShell preflight explicitly selects Git for Windows. Never use
+rem Strawberry Perl's patch.exe, which can abort on a valid patch hunk.
+echo %PATCH% | findstr /i /c:"Strawberry" >nul
+if not errorlevel 1 (
+  echo HUB_PS2_UNSAFE_STRAWBERRY_PATCH
+  goto error
+)
 set GIT="C:\Program Files\Git\bin\git.exe"
 rem We only expect people to be running this software on Xbox One/Series X|S in Developer mode or on Windows UWP.
 set "UWP_CMAKE_FLAGS=-DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0 -DCMAKE_SYSTEM_PROCESSOR=AMD64 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY"
