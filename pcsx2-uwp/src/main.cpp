@@ -6,6 +6,7 @@
 
 #include "UWPHost.h"
 #include "UWPKeyboard.h"
+#include "HubSharedHome.h"
 
 #include "pcsx2/CDVD/CDVDcommon.h"
 #include "pcsx2/CDVD/Windows/IOCtlSrcXbox.h"
@@ -39,6 +40,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 	// Optional Hub resume state: evaluated only after the PCSX2 config is ready.
 	// A normal protocol launch always starts fresh unless resume=1 was requested.
 	bool m_hub_resume_requested = false;
+	std::string m_home; // optional same-drive folder for external saves
 	bool m_initialized = false;
 	std::optional<VMBootParameters> m_autoboot;
 
@@ -87,6 +89,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 
 		std::stringstream filePath;
 		m_hub_resume_requested = false;
+		m_home.clear();
+		m_launchOnExit = L"";
 
 
 		if (args.Kind() == Windows::ApplicationModel::Activation::ActivationKind::Protocol)
@@ -127,12 +131,30 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 				{
 					m_hub_resume_requested = (arg.Value() == L"1");
 				}
+				else if (arg.Name() == winrt::hstring(L"home"))
+				{
+					const std::string candidate = winrt::to_string(arg.Value());
+					if (UaiBrainHubStorage::SafeHome(candidate))
+						m_home = candidate;
+				}
 				else if (arg.Name() == winrt::hstring(L"launchOnExit"))
 				{
 					// Return to the launching frontend on exit.
 					m_launchOnExit = arg.Value();
 				}
 			}
+		}
+
+		// Dev Home "App" allocation cannot safely host modern PS2 emulation.
+		// Report the actionable reason to the Hub, without entering an emulator
+		// menu or promising gameplay. This check never touches the user's saves.
+		if (std::wstring_view(m_launchOnExit).rfind(L"uaibrain-launcher:", 0) == 0 &&
+			Windows::System::MemoryManager::AppMemoryUsageLimit() < (2048ull << 20))
+		{
+			Windows::System::Launcher::LaunchUriAsync(
+				Windows::Foundation::Uri(L"uaibrain-launcher:?from=lowmem-xbsx2"))
+				.Completed([](auto&&,auto&&){ CoreApplication::Exit(); });
+			return;
 		}
 
 		std::string gamePath = filePath.str();
@@ -143,9 +165,28 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 				params.source_type = CDVD_SourceType::Disc;
 			params.filename = std::move(gamePath);
 			if (g_emu_thread)
+			{
+				// Do not replace a currently running game's VM without a shutdown
+				// gate; such a replacement could lose an unsaved memory card.
+				if (VMManager::HasValidVM())
+					return;
+				UaiBrainHubStorage::Configure(m_home);
+				PrepareResume(params);
 				g_emu_thread->startVM(std::move(params));
+			}
 			else
 				m_autoboot = std::move(params);
+		}
+	}
+
+	void PrepareResume(VMBootParameters& params)
+	{
+		if (m_hub_resume_requested && !params.filename.empty())
+		{
+			const std::string resume=VMManager::GetSaveStateFileName(
+				params.filename.c_str(),-1);
+			if (!resume.empty() && FileSystem::FileExists(resume.c_str()))
+				params.save_state = resume;
 		}
 	}
 
@@ -161,6 +202,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 	{
 		if (m_initialized)
 			m_initialized = UWPHost::InitializeConfig();
+		if (m_initialized)
+			UaiBrainHubStorage::Configure(m_home);
 
 		// Start up the CPU thread.
 		if (m_initialized && EmuThread::start())
@@ -169,15 +212,9 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
 			{
 				VMBootParameters params = std::move(*m_autoboot);
 				m_autoboot.reset();
-				// Resume states live in XBSX2's own storage; the Hub does not
-				// request access to its private files or synthesize a save state.
-				// On missing/unidentifiable state boot normally from disc.
-				if (m_hub_resume_requested && !params.filename.empty())
-				{
-					const std::string resume = VMManager::GetSaveStateFileName(params.filename.c_str(), -1);
-					if (!resume.empty() && FileSystem::FileExists(resume.c_str()))
-						params.save_state = resume;
-				}
+				// Resolve the existing resume state after applying the chosen
+				// home, which determines EmuFolders::Savestates.
+				PrepareResume(params);
 				g_emu_thread->startVM(std::move(params));
 			}
 		}
