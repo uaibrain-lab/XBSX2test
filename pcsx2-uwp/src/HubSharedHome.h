@@ -6,6 +6,7 @@
 #pragma once
 
 #include "pcsx2/Host.h"
+#include "pcsx2/INISettingsInterface.h"
 #include "pcsx2/VMManager.h"
 #include "common/Console.h"
 #include "common/FileSystem.h"
@@ -23,9 +24,10 @@ inline bool SafeHome(const std::string& home) {
         return false;
     const char drive = static_cast<char>(std::toupper(static_cast<unsigned char>(home[0])));
     if (drive == 'D') {
-        if (home.rfind("D:\\DevelopmentFiles\\UaiBrainHub\\PS2", 0) != 0)
+        if (home != "D:\\DevelopmentFiles\\UaiBrainHub\\PS2")
             return false;
-    } else if (drive < 'E' || drive > 'Z') {
+    } else if (drive < 'E' || drive > 'Z' ||
+               home != std::string(1, drive) + ":\\UaiBrainHub\\PS2") {
         return false;
     }
     for (size_t i=3; i<home.size(); ++i) {
@@ -107,13 +109,21 @@ inline bool Configure(const std::string& home) {
         if (external) {
             for (const HomeFolder& folder : kFolders) {
                 const std::string path=Path::Combine(home,folder.shared_name);
+                const std::string previous=std::string("Previous_")+folder.setting;
+                if (!wasExternal)
+                    settings->SetStringValue("UaiBrainHub",previous.c_str(),
+                      settings->GetStringValue("Folders",folder.setting,folder.local_name).c_str());
                 settings->SetStringValue("Folders",folder.setting,path.c_str());
             }
             settings->SetBoolValue("UaiBrainHub","ExternalHome",true);
             changed=true;
         } else if (wasExternal) {
-            for (const HomeFolder& folder : kFolders)
-                settings->SetStringValue("Folders",folder.setting,folder.local_name);
+            for (const HomeFolder& folder : kFolders) {
+                const std::string previous=std::string("Previous_")+folder.setting;
+                const std::string original=settings->GetStringValue(
+                   "UaiBrainHub",previous.c_str(),folder.local_name);
+                settings->SetStringValue("Folders",folder.setting,original.c_str());
+            }
             settings->SetBoolValue("UaiBrainHub","ExternalHome",false);
             changed=true;
         }
