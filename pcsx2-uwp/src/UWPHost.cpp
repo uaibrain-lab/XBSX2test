@@ -5,6 +5,7 @@
 
 #include "UWPHost.h"
 #include "UWPUtils.h"
+#include "UWPKeyboard.h"
 
 #include "pcsx2/Achievements.h"
 #include "pcsx2/GameList.h"
@@ -161,6 +162,9 @@ static CoreUI::CoreWindow s_window{nullptr};
 static winrt::com_ptr<ISwapChainPanelNative> s_hub_xaml_panel;
 static u32 s_hub_panel_width = 0;
 static u32 s_hub_panel_height = 0;
+static bool s_hub_keyboard_bound = false;
+static winrt::event_token s_hub_key_down_token;
+static winrt::event_token s_hub_key_up_token;
 static CoreUI::CoreDispatcher s_dispatcher{nullptr};
 static SystemThreading::ThreadPoolTimer s_ui_timer{nullptr};
 static std::atomic_bool s_ui_wake_pending = false;
@@ -1397,6 +1401,38 @@ bool UWPHost::SetXamlSwapChainPanel(void* abi,u32 width,u32 height)
  s_hub_xaml_panel = std::move(panel);
  s_hub_panel_width = width;
  s_hub_panel_height = height;
+ // The standalone XBSX2 app subscribes to CoreWindow keyboard events in
+ // main.cpp. Embedded mode excludes main.cpp and would otherwise drop every
+ // host keyboard/gamepad-key event. Forward only while a PS2 VM exists.
+ // Let the Hub own GamepadB/Escape for its unified save-and-return action.
+ if (!s_hub_keyboard_bound)
+ {
+  s_hub_key_down_token = s_window.KeyDown([](const auto&, const CoreUI::KeyEventArgs& args) {
+   if (!VMManager::HasValidVM() || args.KeyStatus().WasKeyDown)
+    return;
+   const u32 key = static_cast<u32>(args.VirtualKey());
+   if (args.VirtualKey() == winrt::Windows::System::VirtualKey::GamepadB ||
+       args.VirtualKey() == winrt::Windows::System::VirtualKey::Escape ||
+       !UWPKeyboard::IsValidKey(key))
+    return;
+   Host::RunOnCPUThread([key]() {
+    InputManager::InvokeEvents(InputManager::MakeHostKeyboardKey(key), 1.0f);
+   });
+  });
+  s_hub_key_up_token = s_window.KeyUp([](const auto&, const CoreUI::KeyEventArgs& args) {
+   if (!VMManager::HasValidVM())
+    return;
+   const u32 key = static_cast<u32>(args.VirtualKey());
+   if (args.VirtualKey() == winrt::Windows::System::VirtualKey::GamepadB ||
+       args.VirtualKey() == winrt::Windows::System::VirtualKey::Escape ||
+       !UWPKeyboard::IsValidKey(key))
+    return;
+   Host::RunOnCPUThread([key]() {
+    InputManager::InvokeEvents(InputManager::MakeHostKeyboardKey(key), 0.0f);
+   });
+  });
+  s_hub_keyboard_bound = true;
+ }
  UpdateWindowSize();
  return true;
 }
