@@ -28,8 +28,24 @@ if /I "%VSCMD_ARG_APP_PLAT%"=="Desktop" (
   goto error
 )
 
-set SEVENZIP="C:\Program Files\7-Zip\7z.exe"
-set PATCH="C:\Program Files\Git\usr\bin\patch.exe"
+rem Respect a caller-selected 7-Zip/Git patch executable (also VS2026 E: installs).
+if not defined SEVENZIP (
+  if exist "%ProgramFiles%\7-Zip\7z.exe" set SEVENZIP="%ProgramFiles%\7-Zip\7z.exe"
+)
+if not defined SEVENZIP (
+  if exist "%ProgramFiles(x86)%\7-Zip\7z.exe" set SEVENZIP="%ProgramFiles(x86)%\7-Zip\7z.exe"
+)
+if not defined SEVENZIP (
+  echo MISSING_7ZIP: install the free 7-Zip application, then rerun.
+  goto error
+)
+if not defined PATCH (
+  if exist "%ProgramFiles%\Git\usr\bin\patch.exe" set PATCH="%ProgramFiles%\Git\usr\bin\patch.exe"
+)
+if not defined PATCH (
+  echo MISSING_GIT_PATCH: install Git for Windows.
+  goto error
+)
 set GIT="C:\Program Files\Git\bin\git.exe"
 rem We only expect people to be running this software on Xbox One/Series X|S in Developer mode or on Windows UWP.
 set "UWP_CMAKE_FLAGS=-DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0 -DCMAKE_SYSTEM_PROCESSOR=AMD64 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY"
@@ -266,9 +282,11 @@ echo Exiting with success.
 exit 0
 
 :error
-echo Failed with error #%errorlevel%.
-pause
-exit %errorlevel%
+set "DEPS_EXIT_CODE=%errorlevel%"
+if "%DEPS_EXIT_CODE%"=="0" set "DEPS_EXIT_CODE=1"
+echo HUB_PS2_UWP_DEPS_FAILED=%DEPS_EXIT_CODE%
+if /i not "%HUB_DEPS_NONINTERACTIVE%"=="1" pause
+exit /b %DEPS_EXIT_CODE%
 
 :downloadfile
 if not exist "%~1" (
