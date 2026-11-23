@@ -56,6 +56,30 @@ $props=@(
  "/p:OutDir=$($output.TrimEnd('\'))\"
 )
 $log=Join-Path $output "embedded-ps2-msbuild.log"
+# Query the *evaluated* MSBuild settings, not paths inferred from a successful
+# compiler exit code. This catches property-sheet overrides or wrong targets.
+$evaluation=@(& $msbuild $project "/nologo" 
+ "/getProperty:ConfigurationType,TargetName,TargetExt,OutDir,TargetPath" @props)
+if($LASTEXITCODE -ne 0){throw "HUB_PS2_MSBUILD_PROPERTIES_FAILED"}
+try {
+ $evaluated=($evaluation -join [Environment]::NewLine) | ConvertFrom-Json
+ $actual=$evaluated.Properties
+ if(-not $actual){throw "MSBuild returned no evaluated properties"}
+} catch {
+ throw "HUB_PS2_MSBUILD_PROPERTIES_INVALID: $($evaluation -join ' ')"
+}
+Write-Host "HUB_PS2_CONFIGURATION_TYPE=$($actual.ConfigurationType)"
+Write-Host "HUB_PS2_TARGET_NAME=$($actual.TargetName)"
+Write-Host "HUB_PS2_TARGET_EXT=$($actual.TargetExt)"
+Write-Host "HUB_PS2_EVALUATED_OUTDIR=$($actual.OutDir)"
+Write-Host "HUB_PS2_EVALUATED_TARGET=$($actual.TargetPath)"
+if($actual.ConfigurationType -ne "DynamicLibrary" -or
+   $actual.TargetName -ne "uaibrain_ps2_embedded"){
+ throw "HUB_PS2_WRONG_BUILD_TARGET: expected embedded native DLL, not UWP application"
+}
+if([IO.Path]::GetFullPath($actual.OutDir).TrimEnd('\') -ine $output.TrimEnd('\')){
+ throw "HUB_PS2_OUTPUT_DIR_MISMATCH: expected $output got $($actual.OutDir)"
+}
 Write-Host "HUB_PS2_BUILDING_EMBEDDED_DLL_WITH=$msbuild"
 Write-Host "HUB_PS2_MSBUILD_LOG=$log"
 # The complete compiler output is retained in the logfile. The console only
@@ -64,8 +88,23 @@ Write-Host "HUB_PS2_MSBUILD_LOG=$log"
 if($LASTEXITCODE -ne 0){throw "HUB_PS2_EMBEDDED_BUILD_FAILED=$LASTEXITCODE; LOG=$log"}
 $dll=Join-Path $output "uaibrain_ps2_embedded.dll"
 $lib=Join-Path $output "uaibrain_ps2_embedded.lib"
-if(!(Test-Path $dll) -or !(Test-Path $lib)){
- throw "HUB_PS2_BINARY_MISSING: $dll / $lib"
+if(!(Test-Path -LiteralPath $dll -PathType Leaf) -or
+   !(Test-Path -LiteralPath $lib -PathType Leaf)){
+ Write-Host "HUB_PS2_OUTPUT_DIAGNOSTICS:" -ForegroundColor Yellow
+ # Report the exact evaluated target and any linker warnings. Do not copy a
+ # similarly named stale binary from a separate UWP app or previous build.
+ Write-Host "  EVALUATED_TARGET=$($actual.TargetPath)"
+ foreach($path in @($actual.TargetPath,$dll,$lib)){
+  if($path -and (Test-Path -LiteralPath $path -PathType Leaf)){
+   $item=Get-Item -LiteralPath $path
+   Write-Host "  FOUND=$($item.FullName) size=$($item.Length) modified=$($item.LastWriteTimeUtc.ToString('o'))"
+  }
+ }
+ if(Test-Path -LiteralPath $log -PathType Leaf){
+  Select-String -LiteralPath $log -Pattern 'warning [A-Z]+[0-9]+','->.*(dll|lib)','link.exe','/OUT:' |
+   Select-Object -Last 18 | ForEach-Object { Write-Host ("  LOG: "+$_.Line) }
+ }
+ throw "HUB_PS2_BINARY_MISSING: $dll / $lib; inspect HUB_PS2_EVALUATED_TARGET and MSBuild log"
 }
 $resources=Join-Path $output "resources"
 if(!(Test-Path $resources -PathType Container)){
