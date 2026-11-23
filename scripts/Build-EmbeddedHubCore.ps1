@@ -76,17 +76,28 @@ if($actual.ConfigurationType -ne "DynamicLibrary" -or
    $actual.TargetName -ne "uaibrain_ps2_embedded"){
  throw "HUB_PS2_WRONG_BUILD_TARGET: expected embedded native DLL, not UWP application"
 }
-if([IO.Path]::GetFullPath($actual.OutDir).TrimEnd('\') -ine $output.TrimEnd('\')){
- throw "HUB_PS2_OUTPUT_DIR_MISMATCH: expected $output got $($actual.OutDir)"
+# VS18/UWP may append the vcxproj directory name to OutDir even when
+# /p:OutDir points at build\embedded-ps2. Respect the evaluated path,
+# but never accept output from another project or an unrelated directory.
+$runtimeOutput=[IO.Path]::GetFullPath([string]$actual.OutDir).TrimEnd('\')
+$allowedOutputs=@($output.TrimEnd('\'),(Join-Path $output "pcsx2-uwp").TrimEnd('\'))
+if($runtimeOutput -notin $allowedOutputs){
+ throw "HUB_PS2_OUTPUT_DIR_MISMATCH: expected one of $($allowedOutputs -join ', ') got $runtimeOutput"
 }
+$target=[IO.Path]::GetFullPath([string]$actual.TargetPath)
+$expectedTarget=Join-Path $runtimeOutput "uaibrain_ps2_embedded.dll"
+if($actual.TargetExt -ne ".dll" -or $target -ine $expectedTarget){
+ throw "HUB_PS2_TARGET_PATH_MISMATCH: expected $expectedTarget got $target"
+}
+Write-Host "HUB_PS2_EFFECTIVE_RUNTIME_DIR=$runtimeOutput"
 Write-Host "HUB_PS2_BUILDING_EMBEDDED_DLL_WITH=$msbuild"
 Write-Host "HUB_PS2_MSBUILD_LOG=$log"
 # The complete compiler output is retained in the logfile. The console only
 # shows errors/summary, avoiding megabytes of unrelated third-party sources.
 & $msbuild $project "/restore" "/m:2" "/t:Build" "/verbosity:minimal" "/consoleloggerparameters:ErrorsOnly;Summary" "/fileLogger" ("/fileLoggerParameters:LogFile="+$log+";Verbosity=normal") @props
 if($LASTEXITCODE -ne 0){throw "HUB_PS2_EMBEDDED_BUILD_FAILED=$LASTEXITCODE; LOG=$log"}
-$dll=Join-Path $output "uaibrain_ps2_embedded.dll"
-$lib=Join-Path $output "uaibrain_ps2_embedded.lib"
+$dll=Join-Path $runtimeOutput "uaibrain_ps2_embedded.dll"
+$lib=Join-Path $runtimeOutput "uaibrain_ps2_embedded.lib"
 if(!(Test-Path -LiteralPath $dll -PathType Leaf) -or
    !(Test-Path -LiteralPath $lib -PathType Leaf)){
  Write-Host "HUB_PS2_OUTPUT_DIAGNOSTICS:" -ForegroundColor Yellow
@@ -105,13 +116,18 @@ if(!(Test-Path -LiteralPath $dll -PathType Leaf) -or
  }
  throw "HUB_PS2_BINARY_MISSING: $dll / $lib; inspect HUB_PS2_EVALUATED_TARGET and MSBuild log"
 }
-$resources=Join-Path $output "resources"
-if(!(Test-Path $resources -PathType Container)){
+$resources=Join-Path $runtimeOutput "resources"
+if(!(Test-Path -LiteralPath $resources -PathType Container)){
  throw "HUB_PS2_RESOURCES_MISSING=$resources"
 }
+# Publish the exact, validated DLL directory for the single APPX orchestrator.
+# Never guess where MSBuild wrote the DLL or copy a stale standalone binary.
+$runtimeMarker=Join-Path $output "embedded-runtime-dir.txt"
+[IO.File]::WriteAllText($runtimeMarker,$runtimeOutput,[Text.UTF8Encoding]::new($false))
+Write-Host "HUB_PS2_RUNTIME_MARKER=$runtimeMarker"
 Write-Host "HUB_PS2_EMBEDDED_BUILD_OK" -ForegroundColor Green
 Write-Host "HUB_PS2_EMBEDDED_DLL=$dll"
 Write-Host "HUB_PS2_EMBEDDED_IMPLIB=$lib"
-Write-Host "HUB_PS2_EMBEDDED_RUNTIME_DIR=$output"
+Write-Host "HUB_PS2_EMBEDDED_RUNTIME_DIR=$runtimeOutput"
 Write-Host "HUB_PS2_FORK_SOURCE_DIR=$root"
 Write-Host "ONE_APPX=yes; gameplay hardware validation pending"
