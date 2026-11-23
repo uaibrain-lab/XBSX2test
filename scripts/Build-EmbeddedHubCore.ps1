@@ -90,6 +90,20 @@ if($actual.TargetExt -ne ".dll" -or $target -ine $expectedTarget){
  throw "HUB_PS2_TARGET_PATH_MISMATCH: expected $expectedTarget got $target"
 }
 Write-Host "HUB_PS2_EFFECTIVE_RUNTIME_DIR=$runtimeOutput"
+# An old DLL/import library can survive a changed property sheet or a failed
+# incremental link. Clear only the two expected outputs before the build so a
+# successful MSBuild exit must actually produce the embedded core artifacts.
+$runtimeMarker=Join-Path $output "embedded-runtime-dir.txt"
+if(Test-Path -LiteralPath $runtimeMarker -PathType Leaf){
+ Remove-Item -LiteralPath $runtimeMarker -Force
+}
+foreach($artifact in @("uaibrain_ps2_embedded.dll","uaibrain_ps2_embedded.lib")){
+ $old=Join-Path $runtimeOutput $artifact
+ if(Test-Path -LiteralPath $old -PathType Leaf){
+  Remove-Item -LiteralPath $old -Force
+ }
+}
+Write-Host "HUB_PS2_OLD_BINARY_OUTPUTS_CLEARED=YES"
 Write-Host "HUB_PS2_BUILDING_EMBEDDED_DLL_WITH=$msbuild"
 Write-Host "HUB_PS2_MSBUILD_LOG=$log"
 # The complete compiler output is retained in the logfile. The console only
