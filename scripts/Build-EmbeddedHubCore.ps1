@@ -58,8 +58,7 @@ $props=@(
 $log=Join-Path $output "embedded-ps2-msbuild.log"
 # Query the *evaluated* MSBuild settings, not paths inferred from a successful
 # compiler exit code. This catches property-sheet overrides or wrong targets.
-$evaluation=@(& $msbuild $project "/nologo" 
- "/getProperty:ConfigurationType,TargetName,TargetExt,OutDir,TargetPath" @props)
+$evaluation=@(& $msbuild $project "/nologo" "/getProperty:ConfigurationType,TargetName,TargetExt,OutDir,TargetPath" @props)
 if($LASTEXITCODE -ne 0){throw "HUB_PS2_MSBUILD_PROPERTIES_FAILED"}
 try {
  $evaluated=($evaluation -join [Environment]::NewLine) | ConvertFrom-Json
