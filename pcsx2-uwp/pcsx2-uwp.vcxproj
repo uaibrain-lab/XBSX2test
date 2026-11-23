@@ -68,6 +68,14 @@
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
     <AppxSymbolPackageEnabled>True</AppxSymbolPackageEnabled>
   </PropertyGroup>
+  <!-- Only the embedded build emits a native core DLL into the Hub staging dir.
+       Set both outputs explicitly: the standalone .exe remains untouched. -->
+  <ItemDefinitionGroup Condition="'$(UaiBrainHubEmbedded)'=='true'">
+    <Link>
+      <OutputFile>$(OutDir)uaibrain_ps2_embedded.dll</OutputFile>
+      <ImportLibrary>$(OutDir)uaibrain_ps2_embedded.lib</ImportLibrary>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir);$(SolutionDir)pcsx2;$(SolutionDir)3rdparty\include;$(SolutionDir)3rdparty\imgui\include;$(SolutionDir)3rdparty\fast_float\include;$(SolutionDir)3rdparty\fmt\include;$(SolutionDir)3rdparty\simpleini\include;$(SolutionDir)3rdparty\glad\include;$(DepsIncludeDir)\freetype2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
