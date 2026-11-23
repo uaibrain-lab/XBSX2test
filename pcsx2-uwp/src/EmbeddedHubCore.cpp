@@ -14,6 +14,9 @@
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
+// Embedded DLL has no SDL_main entrypoint. Match the standalone UWP host:
+// prevent SDL3 from rewriting the app entrypoint, then initialize SDL manually.
+#define SDL_MAIN_HANDLED
 #include <SDL3/SDL_main.h>
 #include <atomic>
 #include <string>
