@@ -70,6 +70,12 @@
   </PropertyGroup>
   <!-- Only the embedded build emits a native core DLL into the Hub staging dir.
        Set both outputs explicitly: the standalone .exe remains untouched. -->
+  <!-- Embedded DLL owns no application entrypoint: prevent SDL3 from emitting SDL_main wrappers in any translation unit. -->
+  <ItemDefinitionGroup Condition="'$(UaiBrainHubEmbedded)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>SDL_MAIN_HANDLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(UaiBrainHubEmbedded)'=='true'">
     <Link>
       <OutputFile>$(OutDir)uaibrain_ps2_embedded.dll</OutputFile>
