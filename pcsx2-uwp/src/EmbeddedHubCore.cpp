@@ -27,6 +27,14 @@ namespace {
 std::atomic<bool> s_attached{false};
 std::atomic<bool> s_boot_queued{false};
 std::atomic<bool> s_exit_after_boot{false};
+// A failed C ABI callback must not unwind into the Hub's different runtime.
+// Keep the VM unavailable until a fresh app launch can rebuild host state.
+std::atomic<bool> s_bridge_faulted{false};
+void bridge_fault(const char* operation) noexcept {
+ s_bridge_faulted.store(true,std::memory_order_release);
+ OutputDebugStringA(operation);
+ OutputDebugStringA("\n");
+}
 std::mutex s_start_mutex;
 bool s_window_bound = false;
 extern "C" void uwp_redirect_file_apis_embedded(void);
@@ -46,6 +54,7 @@ std::string utf8_path(const wchar_t* path) {
 int attach_panel(void* abi,uint32_t width,uint32_t height) {
  if(!abi||width<64||height<64||width>4096||height>4096)return 0;
  std::lock_guard<std::mutex> guard(s_start_mutex);
+ if(s_bridge_faulted.load(std::memory_order_acquire))return 0;
  if(s_attached.load())return 1;
  try {
   const auto window=winrt::Windows::UI::Core::CoreWindow::GetForCurrentThread();
@@ -73,10 +82,17 @@ int attach_panel(void* abi,uint32_t width,uint32_t height) {
  }
 }
 int ready(){
- return s_attached.load() && g_emu_thread && g_emu_thread->isRunning();
+ if(s_bridge_faulted.load(std::memory_order_acquire))return 0;
+ try {
+  return s_attached.load() && g_emu_thread && g_emu_thread->isRunning();
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_READY_EXCEPTION");
+  return 0;
+ }
 }
 UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
                                   const wchar_t* saves,int auto_resume) {
+ try {
  if(!ready())return UAIBRAIN_PS2_V2_NO_CORE;
  const std::string game_file=utf8_path(game);
  const std::string save_root=utf8_path(saves);
@@ -111,11 +127,21 @@ UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
  }
  s_exit_after_boot.store(false,std::memory_order_release);
  s_boot_queued.store(true,std::memory_order_release);
- g_emu_thread->startVM(std::move(params));
+ try {
+  g_emu_thread->startVM(std::move(params));
+ } catch(...) {
+  s_boot_queued.store(false,std::memory_order_release);
+  throw;
+ }
  return UAIBRAIN_PS2_V2_BOOT_ACCEPTED;
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_BOOT_EXCEPTION");
+  return UAIBRAIN_PS2_V2_INTERNAL_ERROR;
+ }
 }
 void pump_ui(){
- if(!s_attached.load())return;
+ if(!s_attached.load()||s_bridge_faulted.load(std::memory_order_acquire))return;
+ try {
  UWPHost::ProcessPendingEvents();
  // The user may press B while the game is still being queued/initialized.
  // Honor that exit when the VM first becomes valid; do not leave the player
@@ -127,18 +153,30 @@ void pump_ui(){
    g_emu_thread->shutdownVM(true);
   }
  }
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_POLL_EXCEPTION");
+ }
 }
 int has_vm(){
- if(!s_attached.load())return -1;
- return VMManager::HasValidVM()?1:0;
+ if(!s_attached.load()||s_bridge_faulted.load(std::memory_order_acquire))return -1;
+ try {
+  return VMManager::HasValidVM()?1:0;
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_VM_STATE_EXCEPTION");
+  return -1;
+ }
 }
 void request_exit(){
  if(!s_attached.load()||!g_emu_thread)return;
+ try {
  if(VMManager::HasValidVM()){
   s_exit_after_boot.store(false,std::memory_order_release);
   g_emu_thread->shutdownVM(true); // Save memory card and normal resume state.
  }else if(s_boot_queued.load(std::memory_order_acquire)){
   s_exit_after_boot.store(true,std::memory_order_release);
+ }
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_EXIT_EXCEPTION");
  }
 }
 const UaiBrainPs2CoreApiV2 s_api{
