@@ -1414,11 +1414,24 @@ bool UWPHost::SetXamlSwapChainPanel(void* abi,u32 width,u32 height)
  const HRESULT hr = reinterpret_cast<IUnknown*>(abi)->QueryInterface(
      __uuidof(ISwapChainPanelNative), panel.put_void());
  if (FAILED(hr) || !panel)
-  return false;
+ {
+  // Jadyx is a native CoreApplication, not a XAML app. Accept only the
+  // actual CoreWindow of this UI thread, never an arbitrary IUnknown.
+  winrt::com_ptr<IUnknown> supplied_identity;
+  winrt::com_ptr<IUnknown> window_identity;
+  const auto supplied = reinterpret_cast<IUnknown*>(abi);
+  const auto current = reinterpret_cast<IUnknown*>(winrt::get_abi(s_window));
+  if (FAILED(supplied->QueryInterface(__uuidof(IUnknown), supplied_identity.put_void())) ||
+      FAILED(current->QueryInterface(__uuidof(IUnknown), window_identity.put_void())) ||
+      !supplied_identity || supplied_identity.get() != window_identity.get())
+   return false;
+  panel = nullptr;
+ }
+ // With no panel, the existing DX11/DX12 CoreWindow swap-chain path is used.
  s_hub_xaml_panel = std::move(panel);
- s_hub_embedded.store(true, std::memory_order_release);
  s_hub_panel_width = width;
  s_hub_panel_height = height;
+ s_hub_embedded.store(true, std::memory_order_release);
  // The standalone XBSX2 app subscribes to CoreWindow keyboard events in
  // main.cpp. Embedded mode excludes main.cpp and would otherwise drop every
  // host keyboard/gamepad-key event. Forward only while a PS2 VM exists.
@@ -1590,9 +1603,9 @@ void UWPHost::UpdateWindowSize()
 		wi.surface_height = max_height;
 	}
 
-	// For a XAML surface, the SwapChainPanel size is authoritative; HDMI
-	// resolution belongs to the standalone CoreWindow renderer only.
-	if (s_hub_xaml_panel)
+	// In embedded mode the host chooses the swap-chain dimensions for either
+	// a XAML panel or the native CoreWindow; standalone still uses HDMI mode.
+	if (s_hub_embedded.load(std::memory_order_acquire))
 	{
 		wi.surface_width = s_hub_panel_width;
 		wi.surface_height = s_hub_panel_height;
