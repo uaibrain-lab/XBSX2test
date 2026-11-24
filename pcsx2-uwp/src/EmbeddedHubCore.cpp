@@ -62,10 +62,10 @@ int attach_panel(void* abi,uint32_t width,uint32_t height) {
   const char* error=nullptr;
   if(!VMManager::PerformEarlyHardwareChecks(&error))return 0;
   if(!s_window_bound){
-   // In contrast to the standalone XBSX2 App, the XAML dispatcher is
-   // already running. UWPHost must not try to own or pump it.
-   UWPHost::SetWindow(window);
+   // The Hub owns this dispatcher. Track even a partially initialized host
+   // so the native caller can release it after a failed attach.
    s_window_bound=true;
+   UWPHost::SetWindow(window);
   }
   if(!UWPHost::SetXamlSwapChainPanel(abi,width,height))return 0;
   // In the single-package build, PCSX2 is a DLL: its own import table
@@ -106,8 +106,9 @@ UaiBrainPs2BootResultV2 boot_disc(const wchar_t* game,
  const bool is_local=(save_root==local);
  if(!is_local&&!UaiBrainHubStorage::SafeHome(save_root))
   return UAIBRAIN_PS2_V2_INVALID_GAME;
- if(VMManager::GetState()!=VMState::Shutdown)
-  return UAIBRAIN_PS2_V2_UNSUPPORTED; // Never overwrite an existing VM.
+ if(VMManager::GetState()!=VMState::Shutdown ||
+    UWPHost::GetEmbeddedBootState()==UWPHost::EmbeddedBootState::Starting)
+  return UAIBRAIN_PS2_V2_UNSUPPORTED; // Never overwrite a running or queued VM.
  // Configure before the CPU thread begins booting the game. Existing
  // memory cards are COPIED, never destroyed, by HubSharedHome::Configure.
  if(is_local) {
@@ -146,6 +147,10 @@ void pump_ui(){
  // The user may press B while the game is still being queued/initialized.
  // Honor that exit when the VM first becomes valid; do not leave the player
  // in the game after a visible "saving and returning" message.
+ if(UWPHost::GetEmbeddedBootState()==UWPHost::EmbeddedBootState::Failed){
+  s_boot_queued.store(false,std::memory_order_release);
+  s_exit_after_boot.store(false,std::memory_order_release);
+ }
  if(VMManager::HasValidVM()){
   s_boot_queued.store(false,std::memory_order_release);
   if(s_exit_after_boot.exchange(false,std::memory_order_acq_rel) &&
@@ -190,4 +195,37 @@ const UaiBrainPs2CoreApiV2 s_api{
 // Repeating __declspec(dllexport) here triggers MSVC C2375.
 const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void){
  return &s_api;
+}
+
+int uaibrain_ps2_core_session_state_v2(void){
+ try {
+  if(!ready()) return 3;
+  return static_cast<int>(UWPHost::GetEmbeddedBootState());
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_STATE_EXCEPTION");
+  return 3;
+ }
+}
+
+int uaibrain_ps2_core_release_v2(void){
+ try {
+  const auto window=winrt::Windows::UI::Core::CoreWindow::GetForCurrentThread();
+  if(!window || !window.Dispatcher().HasThreadAccess()) return 0;
+  std::lock_guard<std::mutex> guard(s_start_mutex);
+  if(!s_window_bound) return 1;
+  // Do not destroy a VM while boot is pending or while saves are in progress.
+  if(g_emu_thread && g_emu_thread->isRunning() &&
+     (VMManager::GetState()!=VMState::Shutdown ||
+      UWPHost::GetEmbeddedBootState()==UWPHost::EmbeddedBootState::Starting)) return 0;
+  UWPHost::Shutdown();
+  VMManager::WaitForSaveStateFlush();
+  s_window_bound=false;
+  s_attached.store(false,std::memory_order_release);
+  s_boot_queued.store(false,std::memory_order_release);
+  s_exit_after_boot.store(false,std::memory_order_release);
+  return 1;
+ } catch(...) {
+  bridge_fault("UAIBRAIN_PS2_CORE_RELEASE_EXCEPTION");
+  return 0;
+ }
 }
