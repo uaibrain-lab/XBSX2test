@@ -102,6 +102,9 @@ namespace UWPHost
     bool SetXamlSwapChainPanel(void* panel_abi, u32 width, u32 height);
     // Called by DX11/DX12 GS threads; dispatches SetSwapChain to XAML UI.
     bool AttachXamlSwapChain(IDXGISwapChain1* swap_chain);
+    // Native Hub lifecycle: distinguish an accepted boot from actual VM startup.
+    enum class EmbeddedBootState : int { Idle = 0, Starting = 1, Active = 2, Failed = 3, Stopped = 4 };
+    EmbeddedBootState GetEmbeddedBootState();
 
 
 	/// Updates the render window size. Must be called on the UI thread.
