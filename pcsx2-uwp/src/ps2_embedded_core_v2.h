@@ -44,6 +44,13 @@ typedef struct UaiBrainPs2CoreApiV2 {
 #define UAIBRAIN_PS2_CORE_ENTRY
 #endif
 UAIBRAIN_PS2_CORE_ENTRY const UaiBrainPs2CoreApiV2* uaibrain_ps2_core_api_v2(void);
+// Additive native-host exports: the original v2 struct layout is unchanged.
+// Idle=0, Starting=1, Active=2 (VM initialized, not first frame), Failed=3,
+// Stopped=4. A dead CPU thread or faulted bridge reports Failed.
+UAIBRAIN_PS2_CORE_ENTRY int uaibrain_ps2_core_session_state_v2(void);
+// UI thread only, after Failed/Stopped/Idle. Joins CPU/GS and detaches host
+// callbacks before another engine may acquire the CoreWindow. 1 = released.
+UAIBRAIN_PS2_CORE_ENTRY int uaibrain_ps2_core_release_v2(void);
 #ifdef __cplusplus
 }
 #endif
