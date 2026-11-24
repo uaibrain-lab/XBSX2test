@@ -160,6 +160,9 @@ static CoreUI::CoreWindow s_window{nullptr};
 // The Hub uses its existing XAML CoreWindow; the emulator paints to a
 // SwapChainPanel inside that window. The referenced COM interface is retained.
 static winrt::com_ptr<ISwapChainPanelNative> s_hub_xaml_panel;
+// Set by the UI thread before the embedded CPU thread starts. The Hub owns
+// the library and fullscreen surface; idle engine UI must not take them over.
+static std::atomic_bool s_hub_embedded{false};
 static u32 s_hub_panel_width = 0;
 static u32 s_hub_panel_height = 0;
 static bool s_hub_keyboard_bound = false;
@@ -223,7 +226,7 @@ bool EmuThread::start()
 	g_emu_thread = thread.get();
 	s_exit_requested.store(false, std::memory_order_release);
 	s_cpu_thread_initialized.store(false, std::memory_order_release);
-	UWPHost::EnableGameListRefresh(true);
+	UWPHost::EnableGameListRefresh(!s_hub_embedded.load(std::memory_order_acquire));
 	thread->m_thread.SetStackSize(static_cast<u32>(VMManager::EMU_THREAD_STACK_SIZE));
 	thread->m_running.store(true, std::memory_order_release);
 	if (thread->m_thread.Start([thread = thread.get()]() {
@@ -319,12 +322,18 @@ void EmuThread::startVM(VMBootParameters boot_params)
 		return;
 	// Determine whether to start fullscreen or not.
 	const bool fullscreen = boot_params.fullscreen.value_or(Host::GetBaseBoolSettingValue("UI", "StartFullscreen", false));
-	if (!startFullscreenUI(fullscreen))
+	// VMManager opens the GS itself when necessary. Only the standalone
+	// frontend needs its own fullscreen library before a normal disc boot.
+	if (!s_hub_embedded.load(std::memory_order_acquire) && !startFullscreenUI(fullscreen))
 		return;
 
 	setFullscreen(fullscreen);
 
-	auto hardcore_disable_callback = [](std::string reason, VMBootRestartCallback restart_callback) {
+	auto hardcore_disable_callback = [this, fullscreen](std::string reason, VMBootRestartCallback restart_callback) {
+		// Preserve the existing explicit consent prompt for resume/debug in
+		// hardcore mode, even when the ordinary engine library is disabled.
+		if (s_hub_embedded.load(std::memory_order_acquire) && !startFullscreenUI(fullscreen))
+			return;
 		MTGS::RunOnGSThread([reason = std::move(reason), restart_callback = std::move(restart_callback)]() {
 			ImGuiFullscreen::OpenConfirmMessageDialog(Achievements::GetHardcoreModeDisableTitle(),
 				Achievements::GetHardcoreModeDisableText(reason.c_str()),
@@ -432,7 +441,8 @@ void EmuThread::run()
 
 	s_cpu_thread_initialized.store(true, std::memory_order_release);
 	processEventQueue();
-	if (!m_shutdown_flag.load(std::memory_order_acquire) && VMManager::GetState() == VMState::Shutdown)
+	if (!s_hub_embedded.load(std::memory_order_acquire) &&
+		!m_shutdown_flag.load(std::memory_order_acquire) && VMManager::GetState() == VMState::Shutdown)
 	{
 		startFullscreenUI(Host::GetBaseBoolSettingValue("UI", "StartFullscreen", false));
 	}
@@ -447,7 +457,8 @@ void EmuThread::run()
 				break;
 
 			case VMState::Shutdown:
-				if (m_reopen_fullscreen_ui.load(std::memory_order_acquire))
+				if (!s_hub_embedded.load(std::memory_order_acquire) &&
+					m_reopen_fullscreen_ui.load(std::memory_order_acquire))
 					startFullscreenUI(isFullscreen());
 				idleEventLoop();
 				break;
@@ -469,7 +480,9 @@ void EmuThread::run()
 			case VMState::Stopping:
 				destroyVM();
 				processEventQueue();
-				if (!m_shutdown_flag.load(std::memory_order_acquire) && !VMManager::HasValidVM() && !MTGS::IsOpen())
+				if (s_hub_embedded.load(std::memory_order_acquire))
+					stopFullscreenUI();
+				else if (!m_shutdown_flag.load(std::memory_order_acquire) && !VMManager::HasValidVM() && !MTGS::IsOpen())
 					startFullscreenUI(isFullscreen());
 				break;
 
@@ -500,8 +513,9 @@ void EmuThread::requestExit()
 
 void EmuThread::onVMStopped()
 {
-	m_reopen_fullscreen_ui.store(true, std::memory_order_release);
-	UWPHost::EnableGameListRefresh(true);
+	const bool standalone = !s_hub_embedded.load(std::memory_order_acquire);
+	m_reopen_fullscreen_ui.store(standalone, std::memory_order_release);
+	UWPHost::EnableGameListRefresh(standalone);
 }
 
 void EmuThread::onDisplayWindowResized(u32 width, u32 height, float scale)
@@ -1314,7 +1328,8 @@ void UWPHost::CancelGameListRefresh()
 
 void UWPHost::ResizeDisplayWindow(s32 width, s32 height)
 {
-	if (width <= 0 || height <= 0)
+	// The Hub controls the XAML layout; don't resize its application view.
+	if (s_hub_embedded.load(std::memory_order_acquire) || width <= 0 || height <= 0)
 		return;
 	UWPHost::RunOnUIThread([width, height]() {
 		const auto view = s_application_view.try_as<ViewManagement::IApplicationView3>();
@@ -1331,6 +1346,8 @@ void UWPHost::ResizeDisplayWindow(s32 width, s32 height)
 
 void UWPHost::SetFullscreen(bool enabled)
 {
+	if (s_hub_embedded.load(std::memory_order_acquire))
+		return; // The existing Hub panel is already the presentation surface.
 	UWPHost::RunOnUIThread([enabled]() {
 		const auto view = s_application_view.try_as<ViewManagement::IApplicationView3>();
 		if (!view)
@@ -1399,6 +1416,7 @@ bool UWPHost::SetXamlSwapChainPanel(void* abi,u32 width,u32 height)
  if (FAILED(hr) || !panel)
   return false;
  s_hub_xaml_panel = std::move(panel);
+ s_hub_embedded.store(true, std::memory_order_release);
  s_hub_panel_width = width;
  s_hub_panel_height = height;
  // The standalone XBSX2 app subscribes to CoreWindow keyboard events in
