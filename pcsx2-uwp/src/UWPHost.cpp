@@ -163,6 +163,17 @@ static winrt::com_ptr<ISwapChainPanelNative> s_hub_xaml_panel;
 // Set by the UI thread before the embedded CPU thread starts. The Hub owns
 // the library and fullscreen surface; idle engine UI must not take them over.
 static std::atomic_bool s_hub_embedded{false};
+static std::atomic<UWPHost::EmbeddedBootState> s_hub_boot_state{UWPHost::EmbeddedBootState::Idle};
+static CoreUI::CoreWindow::Activated_revoker s_window_activated;
+static CoreUI::CoreWindow::Closed_revoker s_window_closed_event;
+
+UWPHost::EmbeddedBootState UWPHost::GetEmbeddedBootState()
+{
+    const auto state = s_hub_boot_state.load(std::memory_order_acquire);
+    if (state == EmbeddedBootState::Active && VMManager::GetState() == VMState::Shutdown)
+        return EmbeddedBootState::Stopped;
+    return state;
+}
 static u32 s_hub_panel_width = 0;
 static u32 s_hub_panel_height = 0;
 static bool s_hub_keyboard_bound = false;
@@ -315,11 +326,19 @@ void EmuThread::startVM(VMBootParameters boot_params)
 {
 	if (!isOnEmuThread())
 	{
-		runOnCPUThread([this, boot_params = std::move(boot_params)]() mutable { startVM(std::move(boot_params)); });
+		const bool embedded = s_hub_embedded.load(std::memory_order_acquire);
+		if (embedded)
+			s_hub_boot_state.store(UWPHost::EmbeddedBootState::Starting, std::memory_order_release);
+		if (!m_cpu_events.Queue([this, boot_params = std::move(boot_params)]() mutable { startVM(std::move(boot_params)); }) && embedded)
+			s_hub_boot_state.store(UWPHost::EmbeddedBootState::Failed, std::memory_order_release);
 		return;
 	}
 	if (m_shutdown_flag.load(std::memory_order_acquire) || VMManager::GetState() != VMState::Shutdown)
+	{
+		if (s_hub_embedded.load(std::memory_order_acquire))
+			s_hub_boot_state.store(UWPHost::EmbeddedBootState::Failed, std::memory_order_release);
 		return;
+	}
 	// Determine whether to start fullscreen or not.
 	const bool fullscreen = boot_params.fullscreen.value_or(Host::GetBaseBoolSettingValue("UI", "StartFullscreen", false));
 	// VMManager opens the GS itself when necessary. Only the standalone
@@ -346,8 +365,13 @@ void EmuThread::startVM(VMBootParameters boot_params)
 	auto done_callback = [](VMBootResult result, const Error& error) {
 		if (result != VMBootResult::StartupSuccess)
 		{
-			// Reuse Qt's translation for the startup error title.
-			Host::ReportErrorAsync(TRANSLATE_SV("QtHost", "Startup Error"), error.GetDescription());
+			if (s_hub_embedded.load(std::memory_order_acquire))
+			{
+				Console.ErrorFmt("Embedded VM boot failed: {}", error.GetDescription());
+				s_hub_boot_state.store(UWPHost::EmbeddedBootState::Failed, std::memory_order_release);
+			}
+			else
+				Host::ReportErrorAsync(TRANSLATE_SV("QtHost", "Startup Error"), error.GetDescription());
 			return;
 		}
 		if (Host::GetBoolSettingValue("UI", "StartPaused", false))
@@ -362,8 +386,19 @@ void EmuThread::startVM(VMBootParameters boot_params)
 			VMManager::SetState(VMState::Running);
 		}
 		InputManager::ReloadDevices();
+		if (s_hub_embedded.load(std::memory_order_acquire))
+			s_hub_boot_state.store(UWPHost::EmbeddedBootState::Active, std::memory_order_release);
 	};
-	VMManager::InitializeAsync(boot_params, std::move(hardcore_disable_callback), std::move(done_callback));
+	if (s_hub_embedded.load(std::memory_order_acquire))
+	{
+		// Never open the engine's fullscreen consent UI over the Hub. A boot
+		// requiring hardcore-mode consent fails until the Hub can ask itself.
+		Error error;
+		const auto result = VMManager::Initialize(boot_params, &error);
+		done_callback(result, error);
+	}
+	else
+		VMManager::InitializeAsync(boot_params, std::move(hardcore_disable_callback), std::move(done_callback));
 }
 
 void EmuThread::shutdownVM(bool save_state /* = true */)
@@ -814,7 +849,7 @@ bool UWPHost::InitializeConfig()
 	if (!settings_exists || !s_base_settings_interface->Load() || !VMManager::Internal::CheckSettingsVersion())
 	{
 		// If the config file doesn't exist, probably good to assume this is a new install so don't prompt to overwrite.
-		if (settings_exists && !ConfirmSettingsReset())
+		if (settings_exists && (s_hub_embedded.load(std::memory_order_acquire) || !ConfirmSettingsReset()))
 			return false;
 
 		VMManager::SetDefaultSettings(*s_base_settings_interface, true, true, true, true, true);
@@ -1510,7 +1545,7 @@ void UWPHost::SetWindow(const CoreUI::CoreWindow& window)
 		s_dpi_changed_registered = SUCCEEDED(UWP::GetABI(s_display_information)->add_DpiChanged(winrt::get_abi(handler), &s_dpi_changed_token));
 	}
 	UWP::GetABI(window)->get_PointerCursor(winrt::put_abi(s_default_cursor));
-	window.Activated([](auto&&, const CoreUI::WindowActivatedEventArgs& args) {
+	s_window_activated = window.Activated(winrt::auto_revoke, [](auto&&, const CoreUI::WindowActivatedEventArgs& args) {
 		s_window_active = args.WindowActivationState() != CoreUI::CoreWindowActivationState::Deactivated;
 		if (s_window_active)
 			s_clipboard_read_requested.store(true, std::memory_order_release);
@@ -1518,7 +1553,7 @@ void UWPHost::SetWindow(const CoreUI::CoreWindow& window)
 			thread->onApplicationStateChanged(s_window_active);
 		UpdateMouseMode();
 	});
-	window.Closed([](auto&&, auto&&) { s_window_closed.store(true, std::memory_order_release); });
+	s_window_closed_event = window.Closed(winrt::auto_revoke, [](auto&&, auto&&) { s_window_closed.store(true, std::memory_order_release); });
 
 	if (const auto factory = winrt::try_get_activation_factory<ViewManagement::ApplicationView, ViewManagement::IApplicationViewStatics2>())
 		UWP::GetABI(factory)->GetForCurrentView(winrt::put_abi(s_application_view));
@@ -1807,6 +1842,23 @@ void UWPHost::Shutdown()
 	s_shutdown_request.reset();
 	// Ensure config is written. Prevents destruction order issues.
 	SaveSettings();
+	// The Hub keeps this CoreWindow alive across different engines.
+	s_window_activated.revoke();
+	s_window_closed_event.revoke();
+	if (s_window && s_hub_keyboard_bound)
+	{
+		s_window.KeyDown(s_hub_key_down_token);
+		s_window.KeyUp(s_hub_key_up_token);
+		s_hub_keyboard_bound = false;
+	}
+	if (s_window && s_cursor_hidden)
+		UWP::GetABI(s_window)->put_PointerCursor(winrt::get_abi(s_default_cursor));
+	s_cursor_hidden = false;
+	s_requested_hide_cursor = s_requested_relative_mouse_mode = false;
+	s_relative_mouse_mode.store(false, std::memory_order_release);
+	s_hub_xaml_panel = nullptr;
+	s_hub_boot_state.store(EmbeddedBootState::Idle, std::memory_order_release);
+	s_hub_embedded.store(false, std::memory_order_release);
 	if (s_mouse_device)
 		UWP::GetABI(s_mouse_device)->remove_MouseMoved(s_mouse_moved_token);
 	s_mouse_device = nullptr;
